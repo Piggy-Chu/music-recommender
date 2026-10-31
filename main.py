@@ -38,12 +38,12 @@ user_ids = sorted(plays.user_id.unique())
 user_idx = {uid: i for i, uid in enumerate(user_ids)}
 
 # 使用者 x 歌曲 矩陣(播放次數取 log,避免少數超高次數主導)
-M = np.zeros((len(user_ids), len(songs)))
+M = np.zeros((len(user_ids), len(songs)), dtype=np.float32)   # float32 省一半記憶體(雲端免費方案記憶體有限)
 M[plays.user_id.map(user_idx).to_numpy(), plays.song_id.map(song_idx).to_numpy()] = np.log1p(
     plays.play_count.to_numpy())
 
 cf_sim = cosine_similarity(M.T)                                    # 歌 x 歌(協同過濾)
-X = songs[FEATURES].to_numpy()
+X = songs[FEATURES].to_numpy(dtype=np.float32)
 X = (X - X.mean(axis=0)) / X.std(axis=0)                           # 標準化,tempo 才不會壓過其他特徵
 content_sim = (cosine_similarity(X) + 1) / 2                       # 轉成 0~1
 SIM = {"cf": cf_sim, "content": content_sim, "hybrid": 0.6 * cf_sim + 0.4 * content_sim}

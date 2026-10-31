@@ -3,15 +3,43 @@
 啟動:streamlit run app.py
 (需要先啟動 FastAPI:uvicorn main:app --reload)
 """
+import os
+import sys
+
 import pandas as pd
 import requests
 import streamlit as st
 
-API = "http://127.0.0.1:8000"
+API = os.environ.get("API_URL", "http://127.0.0.1:8000")  # 雲端部署時由環境變數指定
 COLS = {"title": "歌名", "artist": "歌手", "year": "年份", "total_plays": "總播放數", "score": "推薦分數"}
 
 st.set_page_config(page_title="音樂搜尋與推薦", page_icon="🎵", layout="wide")
 st.title("🎵 音樂搜尋與推薦系統")
+
+
+@st.cache_resource(show_spinner="第一次啟動,正在載入資料並啟動內建 API ...")
+def start_embedded_api():
+    """沒有另外啟動 FastAPI 時(例如部署在 Streamlit Community Cloud),
+    就在同一個程式裡用背景執行緒啟動它。本機照 README 開兩個終端機時不會用到這段。"""
+    import threading
+    import time
+    import urllib.request
+
+    import uvicorn
+
+    try:
+        import main  # 載入資料庫並計算相似度
+    except BaseException as e:  # main.py 找不到資料庫時會 SystemExit
+        return f"無法載入 main.py:{e}"
+    server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=8000, log_level="warning"))
+    threading.Thread(target=server.run, daemon=True).start()
+    for _ in range(120):
+        try:
+            urllib.request.urlopen(f"{API}/popular?limit=1", timeout=2)
+            return None
+        except Exception:
+            time.sleep(0.5)
+    return "內建 API 啟動逾時"
 
 
 @st.cache_data(ttl=60)
@@ -31,8 +59,14 @@ def table(rows):
 try:
     call("/popular", limit=1)
 except requests.exceptions.ConnectionError:
-    st.error("連不上 FastAPI。請先在另一個終端機執行:uvicorn main:app --reload")
-    st.stop()
+    err = start_embedded_api() if API.startswith("http://127.0.0.1") else "API_URL 指定的 FastAPI 連不上"
+    if err:
+        st.error(f"連不上 FastAPI。{err}\n\n本機請先在另一個終端機執行:python -m uvicorn main:app --reload")
+        st.stop()
+    call("/popular", limit=1)
+
+if "main" in sys.modules:
+    st.caption("ℹ️ 目前使用「內建 API 模式」:FastAPI 與網頁在同一個程式中執行。")
 
 tab1, tab2, tab3 = st.tabs(["🔍 搜尋與相似歌曲", "👤 使用者推薦", "🔥 熱門歌曲"])
 
