@@ -130,7 +130,11 @@ def recommend_by_song(song_id: int, k: int = 10, method: str = "hybrid"):
 
 
 @app.get("/users")
-def list_users():
+def list_users(min_plays: int = 0):
+    """使用者清單;min_plays 可只列出至少聽過幾首歌的使用者(隨機挑人時用)。"""
+    if min_plays > 0:
+        counts = plays.groupby("user_id").size()
+        return [int(u) for u in counts[counts >= min_plays].index]
     return [int(u) for u in user_ids]
 
 

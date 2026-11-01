@@ -5,6 +5,7 @@
  沒有另外啟動時,會自動改用「內建 API 模式」,見 start_embedded_api)
 """
 import os
+import random
 import re
 import sys
 
@@ -15,6 +16,28 @@ import streamlit as st
 API = os.environ.get("API_URL", "http://127.0.0.1:8000")  # 雲端部署時可由環境變數指定
 FEATURE_LABELS = {"danceability": "舞動性", "energy": "能量", "valence": "情緒", "acousticness": "原聲度"}
 METHODS = {"hybrid": "混合", "cf": "協同過濾", "content": "音樂特徵"}
+
+# 以下數字來自 etl_real.py 與 evaluate.py 的實際執行結果
+PIPELINE_SONGS = [
+    ("Spotify 檔案列數", 114000, "同一首歌被歸在多個曲風時會重複出現"),
+    ("不重複的 track_id", 89741, "去掉曲風造成的重複"),
+    ("不重複的「歌名 + 歌手」", 81344, "去掉同名同歌手但 track_id 不同的版本"),
+    ("正規化後的比對鍵", 80052, "統一大小寫、括號、符號後再去重複"),
+    ("與 Million Song Dataset 比對成功", 12510, "比對上才有聆聽紀錄可用"),
+    ("取聆聽最多的 3,000 首並篩選使用者後", 2832, "最終匯入資料庫"),
+]
+PIPELINE_PLAYS = [
+    ("Taste Profile 全部聆聽紀錄", 48373586, "使用者、歌曲、播放次數"),
+    ("比對成功歌曲的聆聽紀錄", 6072669, "只保留有 Spotify 特徵的歌"),
+    ("最終匯入資料庫", 59379, "熱門歌曲 + 至少聽過 5 首的 5,000 位使用者"),
+]
+EVAL_ROWS = [  # 方法, Precision@10, Recall@10, HitRate@10, 相對熱門排行
+    ("random(亂猜)", 0.0009, 0.0040, 0.0087, "—"),
+    ("popular(熱門排行,基準線)", 0.0235, 0.0903, 0.1681, "基準"),
+    ("cf(協同過濾)", 0.0493, 0.2093, 0.3559, "+109.8%"),
+    ("content(音樂特徵)", 0.0017, 0.0073, 0.0169, "−92.7%"),
+    ("hybrid(混合)", 0.0319, 0.1333, 0.2462, "+35.6%"),
+]
 
 GLOSSARY = """
 **推薦方法**
@@ -126,7 +149,8 @@ if stats:
 with st.expander("名詞說明(點開查看)"):
     st.markdown(GLOSSARY)
 
-tab1, tab2, tab3, tab4 = st.tabs(["🔍 搜尋與相似歌曲", "👤 使用者推薦", "🔥 熱門歌曲", "🎤 歌手排行"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["🔍 搜尋與相似歌曲", "👤 使用者推薦", "🔥 熱門歌曲", "🎤 歌手排行", "📊 系統評估"])
 
 # ---------- 分頁1:搜尋 -> 選一首 -> 歌曲卡片與相似歌曲 ----------
 with tab1:
@@ -143,19 +167,30 @@ with tab1:
             with left, st.container(border=True):
                 st.subheader(esc(song["title"]))
                 st.caption(f"{esc(song['artist'])} · 總播放 {song['total_plays']:,} 次 · {song['tempo']:.0f} BPM")
-                for key, name in FEATURE_LABELS.items():
-                    v = min(max(float(song[key]), 0.0), 1.0)
-                    st.progress(v, text=f"{name} {v:.2f}")
+                feat = pd.DataFrame({"特徵": list(FEATURE_LABELS.values()),
+                                     "數值": [min(max(float(song[k]), 0.0), 1.0) for k in FEATURE_LABELS]})
+                st.dataframe(feat, hide_index=True, width="stretch", column_config={
+                    "數值": st.column_config.ProgressColumn("數值", min_value=0.0, max_value=1.0, format="%.2f")})
             with right, st.container(border=True):
                 st.markdown("**相似歌曲**")
                 method = pick_method("song_method")
                 show_songs(call(f"/recommend/song/{song['song_id']}", k=10, method=method), with_score=True)
     else:
-        st.info("在上方輸入歌名或歌手開始搜尋,例如 Coldplay、Neon。")
+        st.caption("輸入歌名或歌手開始搜尋,例如 Coldplay、Neon。先看看目前最熱門的歌曲:")
+        show_songs(call("/popular", limit=10))
 
 # ---------- 分頁2:選使用者 -> 聆聽紀錄與推薦 ----------
 with tab2:
-    uid = st.selectbox("選擇使用者", call("/users"))
+    all_users = call("/users")
+
+    def pick_random_user():
+        """隨機挑一位聽過至少 10 首歌的使用者(紀錄太少的使用者展示效果不好)。"""
+        pool = call("/users", min_plays=10) or all_users
+        st.session_state["uid_sel"] = random.choice(pool)
+
+    c_sel, c_btn = st.columns([4, 1], vertical_alignment="bottom")
+    uid = c_sel.selectbox("選擇使用者", all_users, key="uid_sel")
+    c_btn.button("🎲 隨機挑一位", on_click=pick_random_user, width="stretch")
     k = st.slider("推薦幾首", 5, 20, 10)
     left, right = st.columns(2)
     with left, st.container(border=True):
@@ -193,4 +228,30 @@ with tab4:
         with st.container(border=True):
             st.markdown(f"**{esc(who)} 的歌曲**")
             show_songs(call("/artist-songs", name=who))
+
+# ---------- 分頁5:資料處理與推薦評估(靜態說明)----------
+with tab5:
+    st.subheader("資料處理:從 11.4 萬列縮小到 2,832 首歌")
+    st.caption("資料庫只保留「同時有聆聽紀錄與 Spotify 音樂特徵」的歌曲,兩份資料年代不同,重疊有限。")
+    sdf = pd.DataFrame(PIPELINE_SONGS, columns=["歌曲數", "數量", "說明"])
+    st.dataframe(sdf, hide_index=True, width="stretch", column_config={
+        "數量": st.column_config.ProgressColumn("數量", min_value=0, max_value=114000, format="%d")})
+    pdf = pd.DataFrame(PIPELINE_PLAYS, columns=["聆聽紀錄", "筆數", "說明"])
+    st.dataframe(pdf, hide_index=True, width="stretch", column_config={
+        "筆數": st.column_config.NumberColumn("筆數", format="%d")})
+
+    st.subheader("推薦演算法的離線評估")
+    st.caption("方法:對每位使用者藏起約 20% 聽過的歌當標準答案,用其餘紀錄建模後推薦 10 首,看猜中幾首;"
+               "5,000 位使用者全數納入測試,重複 3 次取平均。")
+    edf = pd.DataFrame(EVAL_ROWS, columns=["方法", "Precision@10", "Recall@10", "HitRate@10", "相對熱門排行"])
+    st.dataframe(edf, hide_index=True, width="stretch", column_config={
+        "Precision@10": st.column_config.ProgressColumn("Precision@10", help="推薦的 10 首裡猜中的比例",
+                                                         min_value=0.0, max_value=0.06, format="%.4f"),
+        "Recall@10": st.column_config.NumberColumn("Recall@10", help="被藏起來的歌被找回的比例", format="%.4f"),
+        "HitRate@10": st.column_config.NumberColumn("HitRate@10", help="至少猜中 1 首的使用者比例", format="%.4f")})
+    st.bar_chart(edf.set_index("方法")["Precision@10"])
+    st.markdown(
+        "- **協同過濾最好**:Precision@10 約為熱門排行的 2.1 倍,約 36% 的使用者在推薦的 10 首裡至少猜中 1 首。\n"
+        "- **音樂特徵單獨使用效果差**;混合推薦勝過熱門排行,但不如單用協同過濾。\n"
+        "- 評估只衡量「是否猜中他實際聽過的歌」,沒聽過不代表不喜歡,所以分數偏低是正常的,重點看方法之間的相對高低。")
 
