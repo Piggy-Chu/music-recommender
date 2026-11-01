@@ -233,9 +233,9 @@ with tab4:
 with tab5:
     st.subheader("資料處理:從 11.4 萬列縮小到 2,832 首歌")
     st.caption("資料庫只保留「同時有聆聽紀錄與 Spotify 音樂特徵」的歌曲,兩份資料年代不同,重疊有限。")
-    sdf = pd.DataFrame(PIPELINE_SONGS, columns=["歌曲數", "數量", "說明"])
+    sdf = pd.DataFrame(PIPELINE_SONGS, columns=["階段", "歌曲數", "說明"])
     st.dataframe(sdf, hide_index=True, width="stretch", column_config={
-        "數量": st.column_config.ProgressColumn("數量", min_value=0, max_value=114000, format="%d")})
+        "歌曲數": st.column_config.ProgressColumn("歌曲數", min_value=0, max_value=114000, format="%d")})
     pdf = pd.DataFrame(PIPELINE_PLAYS, columns=["聆聽紀錄", "筆數", "說明"])
     st.dataframe(pdf, hide_index=True, width="stretch", column_config={
         "筆數": st.column_config.NumberColumn("筆數", format="%d")})
