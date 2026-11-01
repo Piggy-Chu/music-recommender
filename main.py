@@ -48,6 +48,10 @@ X = (X - X.mean(axis=0)) / X.std(axis=0)                           # 標準化,t
 content_sim = (cosine_similarity(X) + 1) / 2                       # 轉成 0~1
 SIM = {"cf": cf_sim, "content": content_sim, "hybrid": 0.6 * cf_sim + 0.4 * content_sim}
 popularity = plays.groupby("song_id").play_count.sum()
+# 歌手排行:依歌曲數排序,歌曲數相同時依總播放數排序
+artist_stats = (songs.assign(plays=songs.song_id.map(popularity).fillna(0))
+                .groupby("artist").agg(songs=("song_id", "count"), total_plays=("plays", "sum"))
+                .sort_values(["songs", "total_plays"], ascending=False))
 
 app = FastAPI(title="Music Search & Recommend API")
 
@@ -90,6 +94,22 @@ def stats():
     """資料概況(介面頂端的卡片使用)。"""
     return {"songs": int(len(songs)), "artists": int(songs.artist.nunique()),
             "users": int(len(user_ids)), "plays": int(len(plays))}
+
+
+@app.get("/artists")
+def top_artists(limit: int = 20):
+    """歌手排行:依歌曲數由多到少(歌曲數相同時依總播放數)。"""
+    return [{"rank": i + 1, "artist": name, "songs": int(r["songs"]), "total_plays": int(r["total_plays"])}
+            for i, (name, r) in enumerate(artist_stats.head(limit).iterrows())]
+
+
+@app.get("/artist-songs")
+def artist_songs(name: str):
+    """某位歌手的所有歌曲,依總播放數由高到低。"""
+    idx = np.flatnonzero((songs.artist == name).to_numpy())
+    if len(idx) == 0:
+        raise HTTPException(404, "找不到這位歌手")
+    return sorted((to_dict(i) for i in idx), key=lambda d: d["total_plays"], reverse=True)
 
 
 @app.get("/popular")

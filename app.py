@@ -121,21 +121,22 @@ if stats:
                                                   ("使用者", "users"), ("聆聽紀錄", "plays")]):
         with col.container(border=True):
             st.metric(label, f"{stats[key]:,}")
+    st.caption("資料只包含「同時有聆聽紀錄與 Spotify 音樂特徵」的歌曲,所以歌曲數比原始資料集少。")
 
 with st.expander("名詞說明(點開查看)"):
     st.markdown(GLOSSARY)
 
-tab1, tab2, tab3 = st.tabs(["🔍 搜尋與相似歌曲", "👤 使用者推薦", "🔥 熱門歌曲"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 搜尋與相似歌曲", "👤 使用者推薦", "🔥 熱門歌曲", "🎤 歌手排行"])
 
 # ---------- 分頁1:搜尋 -> 選一首 -> 歌曲卡片與相似歌曲 ----------
 with tab1:
     q = st.text_input("搜尋歌名或歌手", placeholder="輸入歌名或歌手,例如:Neon、Coldplay")
     if q:
-        results = call("/search", q=q, limit=30)
+        results = call("/search", q=q, limit=10000)  # 不設上限(資料庫總共才約三千首歌)
         if not results:
             st.warning("找不到符合的歌曲")
         else:
-            st.caption(f"找到 {len(results)} 首(最多顯示 30 首)")
+            st.caption(f"找到 {len(results)} 首" + ("(結果很多,輸入更完整的歌名或歌手可以縮小範圍)" if len(results) > 200 else ""))
             label = {f"{s['title']} - {s['artist']}": s for s in results}
             song = label[st.selectbox("選一首歌,查看詳細資料與相似歌曲", list(label))]
             left, right = st.columns([5, 7])
@@ -171,3 +172,25 @@ with tab3:
     pop = pd.DataFrame(call("/popular", limit=n))
     st.bar_chart(pop.set_index("title")["total_plays"])
     show_songs(pop.to_dict("records"))
+
+# ---------- 分頁4:歌手排行(依歌曲數)----------
+with tab4:
+    n_art = st.slider("顯示前幾位歌手", 5, 30, 15, key="art_n")
+    try:
+        arts = call("/artists", limit=n_art)
+    except requests.exceptions.RequestException:
+        arts = None
+        st.info("這個分頁需要更新版的 main.py(多了 /artists 端點)。")
+    if arts:
+        adf = pd.DataFrame(arts)
+        st.dataframe(
+            pd.DataFrame({"排名": adf["rank"], "歌手": adf["artist"], "歌曲數": adf["songs"],
+                          "總播放數": adf["total_plays"]}),
+            column_config={"歌曲數": st.column_config.ProgressColumn(
+                "歌曲數", min_value=0, max_value=int(adf["songs"].max()), format="%d")},
+            width="stretch", hide_index=True)
+        who = st.selectbox("選一位歌手,查看他的歌曲(依總播放數由高到低)", adf["artist"])
+        with st.container(border=True):
+            st.markdown(f"**{esc(who)} 的歌曲**")
+            show_songs(call("/artist-songs", name=who))
+
