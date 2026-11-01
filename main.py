@@ -85,6 +85,13 @@ def get_song(song_id: int):
     return to_dict(song_idx[song_id])
 
 
+@app.get("/stats")
+def stats():
+    """資料概況(介面頂端的卡片使用)。"""
+    return {"songs": int(len(songs)), "artists": int(songs.artist.nunique()),
+            "users": int(len(user_ids)), "plays": int(len(plays))}
+
+
 @app.get("/popular")
 def popular(limit: int = 10):
     """依總播放次數排序的熱門歌曲。"""
